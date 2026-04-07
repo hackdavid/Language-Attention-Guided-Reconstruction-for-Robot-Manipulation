@@ -71,6 +71,9 @@ def default_train_config_dict() -> Dict[str, Any]:
             "use_experiment_preset": False,
             "mixed_precision": False,
             "log_every_n_steps": 1,
+            # When >0 and epoch length is known, tqdm/W&B train logs ~this many times per epoch
+            # (every ~1% if 100). When 0, use log_every_n_steps only. Unknown len → log_every_n_steps.
+            "max_logs_per_train_epoch": 100,
             "checkpoint_dir": None,
             "val_batches": 0,
             "resume_from": None,
@@ -121,7 +124,7 @@ def validate_training_batch(
         )
     if logger is not None:
         _, _, h, w = images.shape
-        logger.info(
+        logger.debug(
             "Batch contract: B=%s images=[B,3,%s,%s] action_targets=[%s,%s] dtype=%s",
             b,
             h,
@@ -151,6 +154,7 @@ class TrainingSettings:
     use_experiment_preset: bool = False
     mixed_precision: bool = False
     log_every_n_steps: int = 1
+    max_logs_per_train_epoch: int = 100
     checkpoint_dir: Optional[str] = None
     val_batches: int = 0
     resume_from: Optional[str] = None
@@ -176,8 +180,11 @@ class LAReconVLATrainer:
     so dataset/checkpoint/trainer INFO lines appear on stderr.
 
     W&B (``experiment/02_experiment_plan.md`` §5): ``logging.wandb.enabled: true``, ``project``, and ``WANDB_API_KEY`` (or YAML ``api_key``). Leave ``run_name`` unset for a generated unique name per run.
-    Logs ``train/total_loss``, ``train/action_loss``, ``train/recon_loss`` each step (rate set by ``log_train_every_n_steps``
-    or ``training.log_every_n_steps``); each epoch: ``train/epoch_mean_loss``, ``val/total_loss``, ``val/action_mae_dim_*``,
+    Logs ``train/total_loss``, ``train/action_loss``, ``train/recon_loss`` at a capped rate: by default
+    ``training.max_logs_per_train_epoch`` (100) when the loader length is known (~one log per 1% of the epoch),
+    else ``training.log_every_n_steps``. If ``logging.wandb.log_train_every_n_steps`` is set, W&B
+    logs at that step interval regardless (tqdm stays on the capped cadence). Each epoch end:
+    ``train/epoch_mean_loss``, ``val/total_loss``, ``val/action_mae_dim_*``,
     ``val/action_mae_mean``. Fetch runs programmatically via ``code_base.wandb_training.fetch_run_history`` or
     ``python scripts/wandb_fetch_run.py``.
     """
@@ -289,6 +296,7 @@ class LAReconVLATrainer:
             use_experiment_preset=bool(d.get("use_experiment_preset", False)),
             mixed_precision=bool(d.get("mixed_precision", False)),
             log_every_n_steps=max(1, int(d.get("log_every_n_steps", 1))),
+            max_logs_per_train_epoch=max(0, int(d.get("max_logs_per_train_epoch", 100))),
             checkpoint_dir=d.get("checkpoint_dir"),
             val_batches=int(d.get("val_batches", 0)),
             resume_from=d.get("resume_from"),
@@ -449,7 +457,7 @@ class LAReconVLATrainer:
 
         wb = WandbExperimentLogger(self._wandb_settings, self.config_dict)
         wb.start()
-        wb_train_every = self._wandb_settings.log_train_every_n_steps or self.training.log_every_n_steps
+        wb_train_step_every = self._wandb_settings.log_train_every_n_steps
 
         ckpt_mgr: Optional[CheckpointManager] = None
         if self.training.checkpoint_dir:
@@ -477,23 +485,49 @@ class LAReconVLATrainer:
             for epoch in epoch_pbar:
                 self._log.info("Epoch %s/%s starting", epoch + 1, self.training.epochs)
                 loader = train_loader() if train_loader is not None else self._iter_dummy_batches()
+                try:
+                    epoch_num_batches = len(loader)
+                except TypeError:
+                    epoch_num_batches = None
+                ml = self.training.max_logs_per_train_epoch
+                if epoch_num_batches is not None and ml > 0:
+                    train_log_interval = max(1, int(epoch_num_batches) // ml)
+                else:
+                    train_log_interval = max(1, int(self.training.log_every_n_steps))
+
                 step_losses: List[float] = []
                 batch_pbar = tqdm(
                     loader,
                     desc=f"Train ep {epoch + 1}/{self.training.epochs}",
                     position=1,
                     leave=False,
-                    total=self.training.batches_per_epoch if train_loader is None else None,
+                    total=(
+                        self.training.batches_per_epoch
+                        if train_loader is None
+                        else epoch_num_batches
+                    ),
+                    miniters=train_log_interval,
+                    mininterval=0.25,
                 )
-                for batch in batch_pbar:
+                for batch_idx, batch in enumerate(batch_pbar):
                     images, texts, actions = batch
                     loss_dict = self.train_step(images, texts, actions)
                     total = loss_dict["total"]
                     step_losses.append(total)
-                    if len(step_losses) % self.training.log_every_n_steps == 0:
+                    n_done = batch_idx + 1
+                    is_last = epoch_num_batches is not None and n_done == epoch_num_batches
+                    should_log = (n_done % train_log_interval == 0) or is_last
+                    if should_log:
                         batch_pbar.set_postfix(loss=f"{total:.4f}", action=f"{loss_dict['action']:.4f}")
-                    if wb.active and self._global_step % wb_train_every == 0:
-                        wb.log_train_step(self._global_step, loss_dict)
+                    if wb.active:
+                        wb_dense = (
+                            wb_train_step_every is not None
+                            and self._global_step % max(1, int(wb_train_step_every)) == 0
+                        )
+                        if wb_dense or (
+                            wb_train_step_every is None and should_log
+                        ):
+                            wb.log_train_step(self._global_step, loss_dict)
 
                 mean_train = float(np.mean(step_losses)) if step_losses else 0.0
                 history["train_loss"].append(mean_train)
@@ -513,13 +547,18 @@ class LAReconVLATrainer:
                     v_losses: List[float] = []
                     sum_abs = torch.zeros(ActionHead.NUM_ACTION_DIMS, dtype=torch.float64)
                     sum_n = 0
+                    vb = self.training.val_batches
+                    v_ml = self.training.max_logs_per_train_epoch
+                    val_miniters = max(1, vb // v_ml) if v_ml > 0 else 1
                     for i, batch in enumerate(
                         tqdm(
                             v_loader,
                             desc="Val",
                             position=1,
                             leave=False,
-                            total=self.training.val_batches,
+                            total=vb,
+                            miniters=val_miniters,
+                            mininterval=0.25,
                         )
                     ):
                         if i >= self.training.val_batches:

@@ -1,5 +1,11 @@
 # Project progress
 
+## Train log / tqdm throttle (~100 per epoch) (2026-04)
+
+- **Goal**: Cut terminal (and default W&B step) spam during long epochs.
+- **Feature**: `training.max_logs_per_train_epoch` (default 100): when `len(train_loader)` is known, tqdm `miniters`, postfix, and W&B train scalars align to ~one update per 1% of the epoch (plus last batch). Unknown-length loaders fall back to `training.log_every_n_steps`. Set `max_logs_per_train_epoch: 0` to use only `log_every_n_steps`. If `logging.wandb.log_train_every_n_steps` is set, W&B uses that step interval while tqdm stays throttled. Val tqdm uses the same cap for refresh rate. First-batch batch contract log is DEBUG.
+- **Verification**: Run `pytest tests/test_trainer.py` locally (agent env: torch DLL load failure on Windows).
+
 ## Continuous 7-DoF action head (2026-04)
 
 - **Goal**: Drop per-DoF binning; train with MSE on continuous actions like the dataset.

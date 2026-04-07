@@ -1,0 +1,66 @@
+# C3 — Naive attention-mask MAE (all-head saliency, top 25%). experiment/02_experiment_plan.md §2
+# Run: python train.py --config configs/C3.yaml
+
+experiment:
+  name: C3_attention_naive_mae
+  notes: ""
+  condition: C3
+
+data:
+  libero:
+    batch_size: 4
+    num_workers: 2
+    shuffle: true
+    seed: 42
+    pin_memory: true
+
+model:
+  freeze_backbone: true
+  finetune_last_n_layers: 2
+  num_patches: 196
+  patch_size: 16
+  backbone:
+    model_id: google/paligemma-3b-pt-224
+    torch_dtype: bfloat16
+    device_map: null
+  reconstruction:
+    enabled: true
+    lambda_recon: 0.5
+    decoder_layers: 4
+    decoder_dim: 256
+    decoder_heads: 8
+  masking:
+    mode: attention_naive
+    mask_ratio: 0.25
+    attention_heads: all
+    attention_layers: last_3
+    selected_heads: null
+    head_selection_file: null
+    mask_source: student
+    topology: default
+  ema:
+    enabled: false
+    decay: 0.999
+
+training:
+  epochs: 20
+  batch_size: 8
+  batches_per_epoch: 500
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  device: cuda
+  seed: 42
+  use_experiment_preset: false
+  mixed_precision: true
+  log_every_n_steps: 10
+  checkpoint_dir: ./checkpoints/C3
+  val_batches: 50
+  resume_from: null
+  best_checkpoint_metric: train_loss
+
+logging:
+  wandb:
+    enabled: false
+    project: La-ReconVLA
+    tags: [C3]

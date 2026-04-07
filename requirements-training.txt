@@ -1,0 +1,10 @@
+# Experiment runner + tracking (install on top of torch when training)
+datasets
+transformers
+lerobot
+pyyaml
+mlflow
+wandb
+pandas
+huggingface_hub
+tqdm

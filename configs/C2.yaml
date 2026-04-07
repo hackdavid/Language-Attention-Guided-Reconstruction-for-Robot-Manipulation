@@ -63,6 +63,6 @@ training:
 
 logging:
   wandb:
-    enabled: false
+    enabled: true
     project: La-ReconVLA
     tags: [C2]

@@ -21,6 +21,7 @@ from code_base.model import (
     apply_paligemma_trainable_rules,
     deep_merge_dict,
     ema_update_vision,
+    infer_mae_spatial_from_num_image_tokens,
     model_config_from_dict,
     patchify_images,
     random_patch_mask,
@@ -227,6 +228,16 @@ def test_ema_update():
     ema_update_vision(vt_s, vt_t, decay=0.5)
     w = vt_t.vision_model.encoder.layers[0].weight
     assert torch.allclose(w, torch.full_like(w, 0.5))
+
+
+def test_infer_mae_spatial_from_num_image_tokens():
+    assert infer_mae_spatial_from_num_image_tokens(256) == (256, 14)
+    assert infer_mae_spatial_from_num_image_tokens(196) == (196, 16)
+
+
+def test_infer_mae_spatial_rejects_non_square():
+    with pytest.raises(ValueError, match="perfect square"):
+        infer_mae_spatial_from_num_image_tokens(200)
 
 
 def test_mae_decoder_shapes():

@@ -13,12 +13,14 @@ data:
     shuffle: true
     seed: 42
     pin_memory: true
+    skip_snapshot_download: true
 
 model:
   freeze_backbone: true
   finetune_last_n_layers: 2
-  num_patches: 196
-  patch_size: 16
+  # PaliGemma2-224: 256 tokens, 14px patches (auto-aligned at load if backbone differs).
+  num_patches: 256
+  patch_size: 14
   backbone:
     model_id: /kaggle/input/models/google/paligemma-2/transformers/paligemma2-3b-mix-224/1
     torch_dtype: bfloat16

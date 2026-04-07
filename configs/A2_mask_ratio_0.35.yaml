@@ -17,8 +17,8 @@ data:
 model:
   freeze_backbone: true
   finetune_last_n_layers: 2
-  num_patches: 196
-  patch_size: 16
+  num_patches: 256
+  patch_size: 14
   backbone:
     model_id: google/paligemma-3b-pt-224
     torch_dtype: bfloat16

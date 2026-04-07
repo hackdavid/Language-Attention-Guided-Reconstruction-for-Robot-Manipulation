@@ -1,13 +1,16 @@
 """
 LA-ReconVLA-style model: PaliGemma backbone (vision-only fine-tuning), optional MAE decoder,
-discrete action head. Behavior is driven by C1–C5 experiment config (masking / reconstruction / EMA),
-not by a `target_layer` hyperparameter.
+continuous action head. Behavior is driven by C1–C5 experiment config (masking / reconstruction / EMA).
+
+When reconstruction is enabled, ``num_patches`` / ``patch_size`` are aligned to the loaded
+checkpoint's ``num_image_tokens`` and 224×224 inputs so MAE masks match ``image_hidden_states``.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -17,6 +20,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PaliGemmaForConditionalGeneration, PaliGemmaProcessor
+
+from .logging_utils import get_logger
 
 MaskingMode = Literal["none", "random", "attention_naive", "attention_selected"]
 MaskSource = Literal["student", "ema_teacher"]
@@ -220,6 +225,34 @@ def patchify_images(images: torch.Tensor, patch_size: int) -> torch.Tensor:
     x = torch.einsum("bchpwq->bhwcpq", x)
     x = x.reshape(b, gh * gw, c * patch_size * patch_size)
     return x
+
+
+# PaliGemma 224 checkpoints use a square SigLIP grid; MAE must use the same P and patch_size.
+DEFAULT_MAE_IMAGE_SIZE = 224
+
+
+def infer_mae_spatial_from_num_image_tokens(
+    num_image_tokens: int, *, image_size: int = DEFAULT_MAE_IMAGE_SIZE
+) -> Tuple[int, int]:
+    """
+    Map backbone ``num_image_tokens`` to ``(num_patches, patch_size)`` for square inputs.
+
+    ``num_patches`` equals ``num_image_tokens``; ``patch_size = image_size // sqrt(num_patches)``.
+    """
+    if num_image_tokens <= 0:
+        raise ValueError(f"num_image_tokens must be positive, got {num_image_tokens}")
+    g = int(math.isqrt(num_image_tokens))
+    if g * g != num_image_tokens:
+        raise ValueError(
+            f"num_image_tokens={num_image_tokens} is not a perfect square; "
+            "cannot infer a square patch grid for MAE."
+        )
+    if image_size % g != 0:
+        raise ValueError(
+            f"image_size={image_size} not divisible by grid side g={g} "
+            f"(num_image_tokens={num_image_tokens})"
+        )
+    return num_image_tokens, image_size // g
 
 
 class ActionHead(nn.Module):
@@ -472,6 +505,7 @@ class LAReconVLA(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.backbone = PaliGemmaBackbone(cfg)
+        self._align_mae_spatial_to_backbone()
         d = self.backbone.lm_hidden_size
         self.action_head = ActionHead(d)
         rc = cfg.reconstruction
@@ -491,6 +525,29 @@ class LAReconVLA(nn.Module):
             for p in self.teacher_vision.parameters():
                 p.requires_grad = False
             self.teacher_vision.eval()
+
+    def _align_mae_spatial_to_backbone(self) -> None:
+        """When reconstruction is on, force ``num_patches`` / ``patch_size`` to match image tokens."""
+        if not self.cfg.reconstruction.enabled:
+            return
+        n_vis = self.backbone.num_image_tokens
+        n_p, p_sz = infer_mae_spatial_from_num_image_tokens(
+            n_vis, image_size=DEFAULT_MAE_IMAGE_SIZE
+        )
+        if self.cfg.num_patches != n_p or self.cfg.patch_size != p_sz:
+            log = get_logger(__name__)
+            log.warning(
+                "MAE spatial config aligned to PaliGemma: num_patches %s -> %s, patch_size %s -> %s "
+                "(backbone num_image_tokens=%s, image_size=%s)",
+                self.cfg.num_patches,
+                n_p,
+                self.cfg.patch_size,
+                p_sz,
+                n_vis,
+                DEFAULT_MAE_IMAGE_SIZE,
+            )
+        self.cfg.num_patches = n_p
+        self.cfg.patch_size = p_sz
 
     def forward(
         self,

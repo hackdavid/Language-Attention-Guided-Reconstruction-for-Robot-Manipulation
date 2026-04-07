@@ -1,5 +1,11 @@
 # Project progress
 
+## MAE spatial auto-align to PaliGemma (2026-04)
+
+- **Goal**: Fix `mask_bool must match features batch and num_patches` when YAML used 196/16 but PaliGemma2-224 emits 256 image tokens (14×14 @ patch 14).
+- **Feature**: `infer_mae_spatial_from_num_image_tokens()`; `LAReconVLA._align_mae_spatial_to_backbone()` runs after backbone load when `reconstruction.enabled`, sets `cfg.num_patches` / `cfg.patch_size` from `text_config.num_image_tokens` and 224² inputs; WARNING log if YAML differed. Configs C1–C5 and A1/A2 YAML set `256` / `14` for PaliGemma2 parity.
+- **Verification**: `pytest tests/test_model_config_branches.py::test_infer_mae_spatial_*` locally (agent: torch DLL error on Windows).
+
 ## Train log / tqdm throttle (~100 per epoch) (2026-04)
 
 - **Goal**: Cut terminal (and default W&B step) spam during long epochs.

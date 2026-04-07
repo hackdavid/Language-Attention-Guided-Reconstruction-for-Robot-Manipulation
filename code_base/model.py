@@ -340,6 +340,21 @@ def ema_update_vision(
         t_param.data.mul_(decay).add_(s[name].data, alpha=1.0 - decay)
 
 
+def _paligemma_text_with_image_token(text_instructions: Sequence[str]) -> List[str]:
+    """
+    PaliGemmaProcessor expects a ``<image>`` placeholder at the start of each string when
+    passing ``images=`` (one image per text); avoids HF "infer special tokens" warnings.
+    """
+    out: List[str] = []
+    for raw in text_instructions:
+        t = str(raw)
+        if t.lstrip().startswith("<image>"):
+            out.append(t)
+        else:
+            out.append(f"<image>\n{t}" if t else "<image>")
+    return out
+
+
 class PaliGemmaBackbone(nn.Module):
     """Loads PaliGemma processor + model; exposes projected image tokens and optional LM attentions."""
 
@@ -392,7 +407,8 @@ class PaliGemmaBackbone(nn.Module):
     def build_inputs(
         self, images: torch.Tensor, text_instructions: Sequence[str], device: torch.device
     ) -> Dict[str, torch.Tensor]:
-        proc = self.processor(text=list(text_instructions), images=list(images), return_tensors="pt", padding=True)
+        texts = _paligemma_text_with_image_token(text_instructions)
+        proc = self.processor(text=texts, images=list(images), return_tensors="pt", padding=True)
         return {k: v.to(device) if hasattr(v, "to") else v for k, v in proc.items()}
 
 

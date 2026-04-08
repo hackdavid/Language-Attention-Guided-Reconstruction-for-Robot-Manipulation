@@ -11,8 +11,8 @@ data:
     # Kaggle: use ONE path only, e.g. local_root: /kaggle/working/libero_spatial_image
     # (do not concatenate .../libero_spatial_image/kaggle/working/...).
     skip_snapshot_download: true
-    batch_size: 8
-    num_workers: 4
+    batch_size: 6
+    num_workers: 2
     shuffle: true
     seed: 42
     pin_memory: true
@@ -48,7 +48,7 @@ model:
 
 training:
   epochs: 3
-  batch_size: 32
+  batch_size: 16
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01

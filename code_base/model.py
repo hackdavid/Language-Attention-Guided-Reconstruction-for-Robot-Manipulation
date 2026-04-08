@@ -84,6 +84,33 @@ class ModelConfig:
             self.masking.selected_heads = list(map(int, heads))
 
 
+def _needs_lm_attention_for_masking(cfg: "ModelConfig") -> bool:
+    """True when forward uses ``output_attentions`` (SDPA does not support this — use eager)."""
+    if not cfg.reconstruction.enabled:
+        return False
+    return cfg.masking.mode in ("attention_naive", "attention_selected")
+
+
+def _ensure_paligemma_eager_attention(model: nn.Module) -> None:
+    """
+    PyTorch SDPA attention returns no per-head weights; saliency masking needs eager attention.
+    """
+    setter = getattr(model, "set_attn_implementation", None)
+    if callable(setter):
+        try:
+            setter("eager")
+            return
+        except Exception as e:
+            log = get_logger(__name__)
+            log.warning("set_attn_implementation('eager') failed (%s); patching config", e)
+    c = getattr(model, "config", None)
+    if c is None:
+        return
+    for sub in (c, getattr(c, "text_config", None)):
+        if sub is not None and hasattr(sub, "attn_implementation"):
+            setattr(sub, "attn_implementation", "eager")
+
+
 def _dtype_from_string(name: str) -> torch.dtype:
     m = {
         "float32": torch.float32,
@@ -398,10 +425,16 @@ class PaliGemmaBackbone(nn.Module):
         load_kw: Dict[str, Any] = {"torch_dtype": dtype}
         if cfg.backbone.device_map is not None:
             load_kw["device_map"] = cfg.backbone.device_map
+        if _needs_lm_attention_for_masking(cfg):
+            load_kw["attn_implementation"] = "eager"
         self.processor = PaliGemmaProcessor.from_pretrained(cfg.backbone.model_id)
         self.paligemma = PaliGemmaForConditionalGeneration.from_pretrained(
             cfg.backbone.model_id, **load_kw
         )
+        if _needs_lm_attention_for_masking(cfg):
+            _ensure_paligemma_eager_attention(self.paligemma)
+            log = get_logger(__name__)
+            log.info("Attention masking: using attn_implementation=eager (required for output_attentions).")
         apply_paligemma_trainable_rules(
             self.paligemma, cfg.freeze_backbone, cfg.finetune_last_n_layers
         )

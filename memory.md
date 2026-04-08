@@ -1,5 +1,10 @@
 # Project progress
 
+## C3 attention masking + eager attention (2026-04)
+
+- **Issue**: `sdpa` attention ignores `output_attentions=True` → `RuntimeError: attentions are missing` for `attention_naive` / `attention_selected`.
+- **Fix**: When reconstruction uses those modes, load PaliGemma with `attn_implementation="eager"` and call `set_attn_implementation("eager")` / config fallback (`code_base/model.py`). C3 YAML: `skip_snapshot_download: true` + comment to avoid malformed `local_root` paths on Kaggle.
+
 ## MAE spatial auto-align to PaliGemma (2026-04)
 
 - **Goal**: Fix `mask_bool must match features batch and num_patches` when YAML used 196/16 but PaliGemma2-224 emits 256 image tokens (14×14 @ patch 14).

@@ -18,6 +18,9 @@ from code_base.model import (
     ActionHead,
     LAReconVLAConfigSource,
     MAEDecoder,
+    MaskingConfig,
+    ModelConfig,
+    ReconstructionConfig,
     apply_paligemma_trainable_rules,
     deep_merge_dict,
     ema_update_vision,
@@ -28,6 +31,7 @@ from code_base.model import (
     resolve_attention_layer_indices,
     saliency_topk_mask,
     _aggregate_text_to_image_saliency,
+    _needs_lm_attention_for_masking,
 )
 
 
@@ -228,6 +232,29 @@ def test_ema_update():
     ema_update_vision(vt_s, vt_t, decay=0.5)
     w = vt_t.vision_model.encoder.layers[0].weight
     assert torch.allclose(w, torch.full_like(w, 0.5))
+
+
+def test_needs_lm_attention_for_masking():
+    c_attn = ModelConfig(
+        reconstruction=ReconstructionConfig(enabled=True),
+        masking=MaskingConfig(mode="attention_naive"),
+    )
+    assert _needs_lm_attention_for_masking(c_attn)
+    c_sel = ModelConfig(
+        reconstruction=ReconstructionConfig(enabled=True),
+        masking=MaskingConfig(mode="attention_selected", selected_heads=[0]),
+    )
+    assert _needs_lm_attention_for_masking(c_sel)
+    c_rand = ModelConfig(
+        reconstruction=ReconstructionConfig(enabled=True),
+        masking=MaskingConfig(mode="random"),
+    )
+    assert not _needs_lm_attention_for_masking(c_rand)
+    c_off = ModelConfig(
+        reconstruction=ReconstructionConfig(enabled=False),
+        masking=MaskingConfig(mode="attention_naive"),
+    )
+    assert not _needs_lm_attention_for_masking(c_off)
 
 
 def test_infer_mae_spatial_from_num_image_tokens():

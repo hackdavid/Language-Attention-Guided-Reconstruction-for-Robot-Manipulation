@@ -8,6 +8,9 @@ experiment:
 
 data:
   libero:
+    # Kaggle: use ONE path only, e.g. local_root: /kaggle/working/libero_spatial_image
+    # (do not concatenate .../libero_spatial_image/kaggle/working/...).
+    skip_snapshot_download: true
     batch_size: 8
     num_workers: 4
     shuffle: true

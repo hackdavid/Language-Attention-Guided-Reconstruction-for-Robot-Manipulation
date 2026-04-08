@@ -8,8 +8,8 @@ experiment:
 
 data:
   libero:
-    batch_size: 4
-    num_workers: 2
+    batch_size: 8
+    num_workers: 4
     shuffle: true
     seed: 42
     pin_memory: true
@@ -21,7 +21,7 @@ model:
   num_patches: 256
   patch_size: 14
   backbone:
-    model_id: google/paligemma2-3b-mix-224
+    model_id: /kaggle/input/models/google/paligemma-2/transformers/paligemma2-3b-mix-224/1
     torch_dtype: bfloat16
     device_map: null
   reconstruction:
@@ -44,8 +44,8 @@ model:
     decay: 0.999
 
 training:
-  epochs: 20
-  batch_size: 8
+  epochs: 3
+  batch_size: 32
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01
@@ -54,7 +54,7 @@ training:
   seed: 42
   use_experiment_preset: false
   mixed_precision: true
-  log_every_n_steps: 10
+  log_every_n_steps: 100
   checkpoint_dir: ./checkpoints/C3
   val_batches: 50
   resume_from: null
@@ -62,6 +62,6 @@ training:
 
 logging:
   wandb:
-    enabled: false
+    enabled: true
     project: La-ReconVLA
     tags: [C3]

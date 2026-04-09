@@ -9,6 +9,7 @@ checkpoint's ``num_image_tokens`` and 224×224 inputs so MAE masks match ``image
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import math
 import re
@@ -406,6 +407,59 @@ def _try_paligemma_create_causal_mask_mapping() -> Optional[Any]:
         return None
 
 
+def _invoke_paligemma_create_causal_mask_mapping(
+    create_map: Any,
+    pg: Any,
+    *,
+    inputs_embeds: torch.Tensor,
+    attention_mask: torch.Tensor,
+    past_key_values: Any,
+    position_ids: torch.Tensor,
+    token_type_ids: Optional[torch.Tensor],
+    pixel_values: torch.Tensor,
+    cache_position: torch.Tensor,
+) -> Any:
+    """
+    HF versions disagree on parameter order and names for ``create_causal_mask_mapping``:
+    some use ``inputs_embeds`` and no ``cache_position``; v5+ uses ``input_embeds`` and requires
+    ``cache_position`` before ``past_key_values``. Resolve via ``inspect.signature``.
+    """
+    sig = inspect.signature(create_map)
+    params = sig.parameters
+    has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    kw: Dict[str, Any] = {}
+    if "input_embeds" in params:
+        kw["input_embeds"] = inputs_embeds
+    elif "inputs_embeds" in params:
+        kw["inputs_embeds"] = inputs_embeds
+    else:
+        raise RuntimeError("create_causal_mask_mapping has no input_embeds/inputs_embeds parameter")
+
+    for name, val in (
+        ("attention_mask", attention_mask),
+        ("cache_position", cache_position),
+        ("past_key_values", past_key_values),
+        ("position_ids", position_ids),
+        ("token_type_ids", token_type_ids),
+        ("pixel_values", pixel_values),
+        ("is_training", False),
+    ):
+        if name in params:
+            kw[name] = val
+
+    for opt_name, opt_val in (("is_first_iteration", True), ("use_cache", False)):
+        if opt_name in params:
+            kw[opt_name] = opt_val
+        elif has_varkw:
+            kw[opt_name] = opt_val
+
+    if "cache_position" not in kw and has_varkw:
+        kw["cache_position"] = cache_position
+
+    return create_map(pg.config, **kw)
+
+
 def apply_paligemma_trainable_rules(
     model: nn.Module, freeze_backbone: bool, finetune_last_n_layers: int
 ) -> None:
@@ -565,9 +619,19 @@ def forward_language_model_attentions(
     )
     position_ids = cache_position.unsqueeze(0) + 1
 
-    update_mask = getattr(pg, "_update_causal_mask", None)
-    if callable(update_mask):
-        causal_mask = update_mask(
+    inner = getattr(pg, "model", None)
+    update_inner = getattr(inner, "_update_causal_mask", None) if inner is not None else None
+    if callable(update_inner):
+        causal_mask = update_inner(
+            attention_mask,
+            token_type_ids=token_type_ids,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            input_tensor=inputs_embeds,
+            is_training=False,
+        )
+    elif callable(getattr(pg, "_update_causal_mask", None)):
+        causal_mask = pg._update_causal_mask(
             attention_mask,
             token_type_ids,
             inputs_embeds,
@@ -579,20 +643,20 @@ def forward_language_model_attentions(
         create_map = _try_paligemma_create_causal_mask_mapping()
         if create_map is None:
             raise RuntimeError(
-                "Attention masking needs either PaliGemma._update_causal_mask (legacy layout) or "
-                "transformers.models.paligemma.modeling_paligemma.create_causal_mask_mapping (nested layout)."
+                "Attention masking needs PaliGemmaModel._update_causal_mask, "
+                "legacy PaliGemma._update_causal_mask, or "
+                "transformers.models.paligemma.modeling_paligemma.create_causal_mask_mapping."
             )
-        causal_mask = create_map(
-            pg.config,
-            inputs_embeds,
-            attention_mask,
-            past_key_values,
-            position_ids,
-            token_type_ids,
-            pixel_values,
-            is_training=False,
-            is_first_iteration=True,
-            use_cache=False,
+        causal_mask = _invoke_paligemma_create_causal_mask_mapping(
+            create_map,
+            pg,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            token_type_ids=token_type_ids,
+            pixel_values=pixel_values,
+            cache_position=cache_position,
         )
 
     lm_out = lm(

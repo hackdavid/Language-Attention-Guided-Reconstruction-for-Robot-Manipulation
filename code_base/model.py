@@ -354,6 +354,58 @@ def _vision_encoder_layers(vision_tower: nn.Module) -> Optional[nn.ModuleList]:
     return getattr(enc, "layers", None)
 
 
+def paligemma_vision_tower(pg: Any) -> nn.Module:
+    """
+    HF layout compatibility: older transformers expose ``vision_tower`` on
+    ``PaliGemmaForConditionalGeneration``; newer versions nest it under ``model``.
+    """
+    if hasattr(pg, "vision_tower"):
+        return pg.vision_tower
+    inner = getattr(pg, "model", None)
+    if inner is not None and hasattr(inner, "vision_tower"):
+        return inner.vision_tower
+    raise AttributeError(
+        "PaliGemmaForConditionalGeneration has no vision_tower (expected on module or on .model)."
+    )
+
+
+def paligemma_multi_modal_projector(pg: Any) -> nn.Module:
+    if hasattr(pg, "multi_modal_projector"):
+        return pg.multi_modal_projector
+    inner = getattr(pg, "model", None)
+    if inner is not None and hasattr(inner, "multi_modal_projector"):
+        return inner.multi_modal_projector
+    raise AttributeError("PaliGemma has no multi_modal_projector (top-level or under .model).")
+
+
+def paligemma_language_model(pg: Any) -> Any:
+    if hasattr(pg, "language_model"):
+        return pg.language_model
+    inner = getattr(pg, "model", None)
+    if inner is not None and hasattr(inner, "language_model"):
+        return inner.language_model
+    raise AttributeError("PaliGemma has no language_model (top-level or under .model).")
+
+
+def _paligemma_image_token_id(config: Any) -> int:
+    if hasattr(config, "image_token_index"):
+        return int(config.image_token_index)
+    if hasattr(config, "image_token_id"):
+        return int(config.image_token_id)
+    raise AttributeError("PaliGemma config has neither image_token_index nor image_token_id")
+
+
+def _try_paligemma_create_causal_mask_mapping() -> Optional[Any]:
+    try:
+        from transformers.models.paligemma.modeling_paligemma import (  # type: ignore
+            create_causal_mask_mapping,
+        )
+
+        return create_causal_mask_mapping
+    except (ImportError, AttributeError):
+        return None
+
+
 def apply_paligemma_trainable_rules(
     model: nn.Module, freeze_backbone: bool, finetune_last_n_layers: int
 ) -> None:
@@ -366,9 +418,7 @@ def apply_paligemma_trainable_rules(
         p.requires_grad = False
     if freeze_backbone:
         return
-    if not hasattr(model, "vision_tower"):
-        raise AttributeError("Expected PaliGemmaForConditionalGeneration.vision_tower")
-    vt = model.vision_tower
+    vt = paligemma_vision_tower(model)
     layers = _vision_encoder_layers(vt)
     if finetune_last_n_layers <= 0 or layers is None:
         for p in vt.parameters():
@@ -491,14 +541,19 @@ def forward_language_model_attentions(
     Run the (frozen) language model with image embeddings from a given vision tower
     and return the attention tuple (one tensor per layer).
     """
+    mmp = paligemma_multi_modal_projector(pg)
+    lm = paligemma_language_model(pg)
     emb_dtype = pg.get_input_embeddings().weight.dtype
     pv = pixel_values.to(device=input_ids.device, dtype=emb_dtype)
     image_outputs = vision_tower(pv)
     selected_image_feature = image_outputs.last_hidden_state
-    image_features = pg.multi_modal_projector(selected_image_feature)
-    image_features = image_features / (pg.config.text_config.hidden_size**0.5)
+    image_features = mmp(selected_image_feature)
+    # Flat (legacy) PaliGemma checkpoints scale here; nested HF layout merges without this factor.
+    if hasattr(pg, "vision_tower"):
+        image_features = image_features / (pg.config.text_config.hidden_size**0.5)
     inputs_embeds = pg.get_input_embeddings()(input_ids)
-    special_image_mask = (input_ids == pg.config.image_token_index).unsqueeze(-1).expand_as(inputs_embeds)
+    img_tok = _paligemma_image_token_id(pg.config)
+    special_image_mask = (input_ids == img_tok).unsqueeze(-1).expand_as(inputs_embeds)
     image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
     inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
 
@@ -509,15 +564,38 @@ def forward_language_model_attentions(
         past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=device
     )
     position_ids = cache_position.unsqueeze(0) + 1
-    causal_mask = pg._update_causal_mask(
-        attention_mask,
-        token_type_ids,
-        past_key_values,
-        cache_position,
-        inputs_embeds,
-        is_training=False,
-    )
-    lm_out = pg.language_model(
+
+    update_mask = getattr(pg, "_update_causal_mask", None)
+    if callable(update_mask):
+        causal_mask = update_mask(
+            attention_mask,
+            token_type_ids,
+            inputs_embeds,
+            past_key_values,
+            cache_position,
+            False,
+        )
+    else:
+        create_map = _try_paligemma_create_causal_mask_mapping()
+        if create_map is None:
+            raise RuntimeError(
+                "Attention masking needs either PaliGemma._update_causal_mask (legacy layout) or "
+                "transformers.models.paligemma.modeling_paligemma.create_causal_mask_mapping (nested layout)."
+            )
+        causal_mask = create_map(
+            pg.config,
+            inputs_embeds,
+            attention_mask,
+            past_key_values,
+            position_ids,
+            token_type_ids,
+            pixel_values,
+            is_training=False,
+            is_first_iteration=True,
+            use_cache=False,
+        )
+
+    lm_out = lm(
         attention_mask=causal_mask,
         position_ids=position_ids,
         past_key_values=past_key_values,
@@ -554,7 +632,7 @@ class LAReconVLA(nn.Module):
             )
         self.teacher_vision: Optional[nn.Module] = None
         if cfg.ema.enabled and cfg.masking.mask_source == "ema_teacher":
-            self.teacher_vision = clone_vision_tower(self.backbone.paligemma.vision_tower)
+            self.teacher_vision = clone_vision_tower(paligemma_vision_tower(self.backbone.paligemma))
             for p in self.teacher_vision.parameters():
                 p.requires_grad = False
             self.teacher_vision.eval()
@@ -703,7 +781,7 @@ class LAReconVLA(nn.Module):
         if self.teacher_vision is None:
             return
         ema_update_vision(
-            self.backbone.paligemma.vision_tower,
+            paligemma_vision_tower(self.backbone.paligemma),
             self.teacher_vision,
             self.cfg.ema.decay,
         )

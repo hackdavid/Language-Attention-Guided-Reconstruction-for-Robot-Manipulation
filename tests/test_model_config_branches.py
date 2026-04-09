@@ -26,6 +26,9 @@ from code_base.model import (
     ema_update_vision,
     infer_mae_spatial_from_num_image_tokens,
     model_config_from_dict,
+    paligemma_language_model,
+    paligemma_multi_modal_projector,
+    paligemma_vision_tower,
     patchify_images,
     random_patch_mask,
     resolve_attention_layer_indices,
@@ -206,6 +209,29 @@ class _MockPaliGemma(nn.Module):
         self.language_model = nn.Linear(8, 8)
 
 
+class _MockInnerPaliGemma(nn.Module):
+    """HF nested layout: submodules live on ``model`` (newer transformers)."""
+
+    def __init__(self):
+        super().__init__()
+        self.vision_tower = _MockVisionTower()
+        self.multi_modal_projector = nn.Linear(8, 8)
+        self.language_model = nn.Linear(8, 8)
+
+
+class _MockPaliGemmaNested(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = _MockInnerPaliGemma()
+
+
+def test_paligemma_submodules_nested_hf_layout():
+    m = _MockPaliGemmaNested()
+    assert paligemma_vision_tower(m) is m.model.vision_tower
+    assert paligemma_multi_modal_projector(m) is m.model.multi_modal_projector
+    assert paligemma_language_model(m) is m.model.language_model
+
+
 def test_vision_only_trainable_last_n_layers():
     m = _MockPaliGemma()
     apply_paligemma_trainable_rules(m, freeze_backbone=False, finetune_last_n_layers=2)
@@ -221,6 +247,16 @@ def test_freeze_backbone_all():
     m = _MockPaliGemma()
     apply_paligemma_trainable_rules(m, freeze_backbone=True, finetune_last_n_layers=0)
     assert not any(p.requires_grad for p in m.parameters())
+
+
+def test_vision_only_trainable_nested_layout():
+    m = _MockPaliGemmaNested()
+    apply_paligemma_trainable_rules(m, freeze_backbone=False, finetune_last_n_layers=2)
+    trainable = {name for name, p in m.named_parameters() if p.requires_grad}
+    assert any("model.vision_tower.vision_model.encoder.layers.2" in n for n in trainable)
+    assert any("model.vision_tower.vision_model.encoder.layers.3" in n for n in trainable)
+    assert not m.model.multi_modal_projector.weight.requires_grad
+    assert not m.model.language_model.weight.requires_grad
 
 
 def test_ema_update():

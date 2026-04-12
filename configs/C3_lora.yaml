@@ -14,7 +14,7 @@ experiment:
 data:
   libero:
     skip_snapshot_download: true
-    batch_size: 6
+    batch_size: 4
     num_workers: 2
     shuffle: true
     seed: 42

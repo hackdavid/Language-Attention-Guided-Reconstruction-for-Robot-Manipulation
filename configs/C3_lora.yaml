@@ -1,12 +1,14 @@
-# C3 + LoRA — naive attention-mask MAE with PEFT adapters on named linears (see model.lora.target_modules).
-# Same masking/recon as C3; backbone base weights stay frozen; only LoRA + action head + MAE decoder train.
+# C3 + LoRA — naive attention-mask MAE with PEFT adapters.
+# PaliGemma2 layout: SigLIP vision (q/k/v_proj + out_proj; MLP fc1/fc2), multi_modal_projector.linear,
+# Gemma2 LM (q/k/v_proj + o_proj; MLP gate/up/down_proj). q/k/v match BOTH towers; out_proj=vision only, o_proj=LM only.
+# Trim target_modules if VRAM is tight (e.g. drop fc1/fc2 or gate/up/down_proj). Requires: pip install -U "peft>=0.13"
 # Run: python train.py --config configs/C3_lora.yaml
 #
 # Override backbone.model_id for local/HF, e.g. google/paligemma2-3b-mix-224
 
 experiment:
   name: C3_attention_naive_mae_lora
-  notes: "C3 with LoRA; adjust target_modules to match your checkpoint (print model.named_modules())."
+  notes: "C3 + LoRA (VM+LM+projector linears). OOM → lower training.batch_size or remove MLP targets from model.lora.target_modules."
   condition: C3
 
 data:
@@ -33,12 +35,19 @@ model:
     lora_alpha: 32
     lora_dropout: 0.05
     bias: none
-    # Matched wherever they appear (LM, and vision if present under the same names).
     target_modules:
+      # Shared name → both SigLIP self_attn and Gemma2 self_attn
       - q_proj
       - k_proj
       - v_proj
+      - out_proj
       - o_proj
+      - linear
+      - fc1
+      - fc2
+      - gate_proj
+      - up_proj
+      - down_proj
   reconstruction:
     enabled: true
     lambda_recon: 0.5
@@ -60,7 +69,7 @@ model:
 
 training:
   epochs: 3
-  batch_size: 8
+  batch_size: 16
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01

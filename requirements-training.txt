@@ -1,7 +1,8 @@
 # Experiment runner + tracking (install on top of torch when training)
+# peft: floor for LoRA + modern HF models; `pip install -U peft` for latest compatible release
 datasets
 transformers
-peft
+peft>=0.13.0
 lerobot
 pyyaml
 mlflow

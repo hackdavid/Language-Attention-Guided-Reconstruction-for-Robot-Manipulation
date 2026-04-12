@@ -1,12 +1,12 @@
-# C5 + LoRA — selected-head masks from EMA teacher vision + PEFT adapters on named linears.
-# Same masking/recon/EMA as C5; backbone base frozen; LoRA + action head + MAE decoder train.
+# C5 + LoRA — EMA teacher masks + PEFT on PaliGemma2 (SigLIP + projector + Gemma2 linears; see C3_lora header).
+# Requires: pip install -U "peft>=0.13"
 # Run: python train.py --config configs/C5_lora.yaml
 #
 # Override backbone.model_id for local/HF, e.g. google/paligemma2-3b-mix-224
 
 experiment:
   name: C5_ema_teacher_masks_lora
-  notes: "C5 with LoRA; update selected_heads after diagnostic; target_modules must match checkpoint."
+  notes: "C5 + LoRA (VM+LM+projector). OOM → lower training.batch_size or drop MLP lines from model.lora.target_modules."
   condition: C5
 
 data:
@@ -37,7 +37,14 @@ model:
       - q_proj
       - k_proj
       - v_proj
+      - out_proj
       - o_proj
+      - linear
+      - fc1
+      - fc2
+      - gate_proj
+      - up_proj
+      - down_proj
   reconstruction:
     enabled: true
     lambda_recon: 0.5
@@ -59,7 +66,7 @@ model:
 
 training:
   epochs: 3
-  batch_size: 8
+  batch_size: 16
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01

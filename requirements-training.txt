@@ -1,6 +1,7 @@
 # Experiment runner + tracking (install on top of torch when training)
 datasets
 transformers
+peft
 lerobot
 pyyaml
 mlflow

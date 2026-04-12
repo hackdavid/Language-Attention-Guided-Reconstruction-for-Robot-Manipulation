@@ -1,0 +1,18 @@
+# Merge with a base config to enable LoRA, e.g.:
+#   python train.py --config configs/C2.yaml configs/lora_overlay.example.yaml
+#
+# List exact submodule names (last component) to adapt — PEFT matches them anywhere
+# in PaliGemma (language_model, vision_tower, multi_modal_projector), e.g. q_proj, v_proj,
+# k_proj, o_proj, gate_proj, up_proj, down_proj, fc1, fc2, … depending on checkpoint layout.
+
+model:
+  lora:
+    enabled: true
+    r: 16
+    lora_alpha: 32
+    # alias in YAML: alpha: 32
+    lora_dropout: 0.05
+    bias: none
+    target_modules:
+      - q_proj
+      - v_proj

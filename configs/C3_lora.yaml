@@ -1,0 +1,82 @@
+# C3 + LoRA — naive attention-mask MAE with PEFT adapters on named linears (see model.lora.target_modules).
+# Same masking/recon as C3; backbone base weights stay frozen; only LoRA + action head + MAE decoder train.
+# Run: python train.py --config configs/C3_lora.yaml
+#
+# Override backbone.model_id for local/HF, e.g. google/paligemma2-3b-mix-224
+
+experiment:
+  name: C3_attention_naive_mae_lora
+  notes: "C3 with LoRA; adjust target_modules to match your checkpoint (print model.named_modules())."
+  condition: C3
+
+data:
+  libero:
+    skip_snapshot_download: true
+    batch_size: 6
+    num_workers: 2
+    shuffle: true
+    seed: 42
+    pin_memory: true
+
+model:
+  freeze_backbone: true
+  finetune_last_n_layers: 2
+  num_patches: 256
+  patch_size: 14
+  backbone:
+    model_id: /kaggle/input/models/google/paligemma-2/transformers/paligemma2-3b-mix-224/1
+    torch_dtype: bfloat16
+    device_map: null
+  lora:
+    enabled: true
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    bias: none
+    # Matched wherever they appear (LM, and vision if present under the same names).
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+  reconstruction:
+    enabled: true
+    lambda_recon: 0.5
+    decoder_layers: 4
+    decoder_dim: 256
+    decoder_heads: 8
+  masking:
+    mode: attention_naive
+    mask_ratio: 0.25
+    attention_heads: all
+    attention_layers: last_3
+    selected_heads: null
+    head_selection_file: null
+    mask_source: student
+    topology: default
+  ema:
+    enabled: false
+    decay: 0.999
+
+training:
+  epochs: 3
+  batch_size: 8
+  batches_per_epoch: 500
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  device: cuda
+  seed: 42
+  use_experiment_preset: false
+  mixed_precision: true
+  log_every_n_steps: 100
+  checkpoint_dir: ./checkpoints/C3_lora
+  val_batches: 50
+  resume_from: null
+  best_checkpoint_metric: train_loss
+
+logging:
+  wandb:
+    enabled: true
+    project: La-ReconVLA
+    tags: [C3, lora]

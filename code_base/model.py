@@ -23,6 +23,12 @@ import torch.nn.functional as F
 from transformers import PaliGemmaForConditionalGeneration, PaliGemmaProcessor
 
 from .logging_utils import get_logger
+from .lora_paligemma import (
+    LoRACoreConfig,
+    apply_lora_to_paligemma,
+    paligemma_root_module,
+    parse_lora_config_from_dict,
+)
 
 MaskingMode = Literal["none", "random", "attention_naive", "attention_selected"]
 MaskSource = Literal["student", "ema_teacher"]
@@ -74,8 +80,11 @@ class ModelConfig:
     reconstruction: ReconstructionConfig = field(default_factory=ReconstructionConfig)
     masking: MaskingConfig = field(default_factory=MaskingConfig)
     ema: EMAConfig = field(default_factory=EMAConfig)
+    lora: LoRACoreConfig = field(default_factory=LoRACoreConfig)
 
     def __post_init__(self) -> None:
+        if self.lora.enabled and not self.lora.target_modules:
+            raise ValueError("lora.enabled requires non-empty model.lora.target_modules")
         if self.masking.head_selection_file and self.masking.selected_heads is None:
             with open(self.masking.head_selection_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -539,9 +548,12 @@ class PaliGemmaBackbone(nn.Module):
             _ensure_paligemma_eager_attention(self.paligemma)
             log = get_logger(__name__)
             log.info("Attention masking: using attn_implementation=eager (required for output_attentions).")
-        apply_paligemma_trainable_rules(
-            self.paligemma, cfg.freeze_backbone, cfg.finetune_last_n_layers
-        )
+        if cfg.lora.enabled:
+            self.paligemma = apply_lora_to_paligemma(self.paligemma, cfg.lora)
+        else:
+            apply_paligemma_trainable_rules(
+                self.paligemma, cfg.freeze_backbone, cfg.finetune_last_n_layers
+            )
 
     @property
     def num_image_tokens(self) -> int:
@@ -595,6 +607,7 @@ def forward_language_model_attentions(
     Run the (frozen) language model with image embeddings from a given vision tower
     and return the attention tuple (one tensor per layer).
     """
+    pg = paligemma_root_module(pg)
     mmp = paligemma_multi_modal_projector(pg)
     lm = paligemma_language_model(pg)
     emb_dtype = pg.get_input_embeddings().weight.dtype
@@ -696,7 +709,8 @@ class LAReconVLA(nn.Module):
             )
         self.teacher_vision: Optional[nn.Module] = None
         if cfg.ema.enabled and cfg.masking.mask_source == "ema_teacher":
-            self.teacher_vision = clone_vision_tower(paligemma_vision_tower(self.backbone.paligemma))
+            pg_inner = paligemma_root_module(self.backbone.paligemma)
+            self.teacher_vision = clone_vision_tower(paligemma_vision_tower(pg_inner))
             for p in self.teacher_vision.parameters():
                 p.requires_grad = False
             self.teacher_vision.eval()
@@ -845,7 +859,7 @@ class LAReconVLA(nn.Module):
         if self.teacher_vision is None:
             return
         ema_update_vision(
-            paligemma_vision_tower(self.backbone.paligemma),
+            paligemma_vision_tower(paligemma_root_module(self.backbone.paligemma)),
             self.teacher_vision,
             self.cfg.ema.decay,
         )
@@ -906,6 +920,7 @@ class LAReconVLAConfigSource:
         rec = m.get("reconstruction") or {}
         mask = m.get("masking") or {}
         ema = m.get("ema") or {}
+        lora_cfg = parse_lora_config_from_dict(m.get("lora"))
         cfg = ModelConfig(
             experiment_condition=str(cond),
             backbone=bb_cfg,
@@ -934,6 +949,7 @@ class LAReconVLAConfigSource:
                 enabled=bool(ema.get("enabled", False)),
                 decay=float(ema.get("decay", 0.999)),
             ),
+            lora=lora_cfg,
         )
         cfg.__post_init__()
         self._validate(cfg)

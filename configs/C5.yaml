@@ -47,7 +47,7 @@ model:
 
 training:
   epochs: 3
-  batch_size: 16
+  batch_size: 8
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01

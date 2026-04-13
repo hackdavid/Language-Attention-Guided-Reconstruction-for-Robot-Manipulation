@@ -14,7 +14,7 @@ experiment:
 data:
   libero:
     skip_snapshot_download: true
-    batch_size: 4
+    batch_size: 2
     num_workers: 2
     shuffle: true
     seed: 42
@@ -69,7 +69,7 @@ model:
 
 training:
   epochs: 3
-  batch_size: 2
+  batch_size: 1
   batches_per_epoch: 500
   learning_rate: 1.0e-4
   weight_decay: 0.01

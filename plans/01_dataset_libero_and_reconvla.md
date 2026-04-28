@@ -70,7 +70,7 @@ Always check the dataset card on HuggingFace for current shard sizes.
 
 **Recommendation for this project**
 
-- **Development / agent inspection:** streaming or a **tiny slice** (first N episodes).
+- **Development / quick inspection:** streaming or a **tiny slice** (first N episodes).
 - **Actual training runs (20 epochs, 3×50 demos):** **local snapshot** of the subset you need, or HDF5 subset from LIBERO — avoids mid-training network stalls.
 
 Script: `scripts/download_data_hf.py` (snapshot or list files).

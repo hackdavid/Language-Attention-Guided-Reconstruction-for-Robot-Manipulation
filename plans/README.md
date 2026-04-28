@@ -11,7 +11,7 @@ This folder ties together **data**, **per-condition experiments**, and the **con
 | [exp_C4_selected_heads.md](exp_C4_selected_heads.md) | Condition C4: selected localization heads |
 | [exp_C5_ema_teacher.md](exp_C5_ema_teacher.md) | Condition C5: EMA teacher masks |
 | [exp_ablations.md](exp_ablations.md) | A1–A3 (λ, mask ratio, contiguous masks) |
-| [PIPELINE.md](PIPELINE.md) | YAML merge, MLflow + W&B, agent checks, wiring real training |
+| [PIPELINE.md](PIPELINE.md) | YAML merge, MLflow + W&B, CI checks, wiring real training |
 
 **Pipeline entry**
 
@@ -22,7 +22,7 @@ pip install pyyaml wandb mlflow
 # Smoke test: synthetic loop, logs to MLflow (./mlruns) + W&B (offline if no key)
 python -m training.run_experiment --config configs/experiments/C1_action_only.yaml --smoke
 
-# Read last runs and check vs expectations (for humans + agents)
+# Read last runs and check vs expectations (for humans + CI)
 python scripts/read_tracking.py --mlflow-uri file:./mlruns --expect configs/expectations.yaml
 python scripts/summarize_wandb_offline.py
 ```

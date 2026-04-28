@@ -10,7 +10,7 @@
 | `training/config_loader.py` | Deep-merge `base` + experiment YAML |
 | `training/trackers.py` | **MLflow** (local `file:./mlruns`) + **W&B** (optional) |
 | `training/run_experiment.py` | CLI entry; `--smoke` verifies logging without a model |
-| `scripts/read_tracking.py` | Latest run + expectation check (exit 0/1 for agents) |
+| `scripts/read_tracking.py` | Latest run + expectation check (exit 0/1 for CI) |
 | `scripts/download_data_hf.py` | HuggingFace snapshot / list dataset |
 | `scripts/summarize_wandb_offline.py` | Print latest offline W&B summary JSON |
 
@@ -39,7 +39,7 @@ Edit `model.masking.selected_heads` in `configs/C4.yaml` / `configs/C5.yaml` aft
 
 **CLI:** `python -m code_base.train --no-wandb` forces W&B off (CI / smoke). The older `training/run_experiment.py` `--smoke` pattern applies if you use that entrypoint.
 
-## Agent alignment check
+## CI alignment check
 
 After a run:
 

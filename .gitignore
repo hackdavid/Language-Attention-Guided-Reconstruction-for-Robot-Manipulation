@@ -10,10 +10,13 @@ data/hf_libero_spatial/
 *.pt
 *.pth
 .cursor/
+.claude/
+.devin/
 mlruns
 wandb
 env/
 data/
 configs/*.local.yaml
+memory.md
 .DS_Store
 Thumbs.db

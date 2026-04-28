@@ -1,0 +1,95 @@
+%% LA-ReconVLA training workflow (Figure 2)
+%% Render: mmdc -i workflow.mmd -o workflow.png -w 1600 -H 900 -b white
+flowchart LR
+    %% ===== data pipeline =====
+    subgraph DATA["1. Data Pipeline (LIBERO-Spatial)"]
+        direction TB
+        HF["Hugging Face Hub<br/>lerobot/libero_spatial_image"]
+        SNAP["LeRobotDataset<br/>map / streaming"]
+        COLL["libero_collate_fn<br/>(image, wrist) → 224×224 fused<br/>+ task prompt + 7-DoF action"]
+        HF --> SNAP --> COLL
+    end
+
+    %% ===== forward pass =====
+    subgraph FWD["2. Forward Pass"]
+        direction TB
+        BUILD["build_inputs:<br/>PaliGemma processor<br/>(image+text → tensors)"]
+        PG["PaliGemma2-3B<br/>(bf16, eager attn for C3-C5)"]
+        TOK["Image tokens [B,256,2304]"]
+        ATTN2["Attention tensors<br/>(C3, C4, C5)"]
+        BUILD --> PG --> TOK
+        PG --> ATTN2
+    end
+
+    %% ===== mask + decoder =====
+    subgraph MASKDEC["3. Masking + Reconstruction"]
+        direction TB
+        MASKBLK{"Masking mode"}
+        RND["Random 25%<br/>(C2)"]
+        ATTNAVG["All-head average<br/>top-25%<br/>(C3)"]
+        ATTNSEL["Selected heads<br/>top-25%<br/>(C4, C5)"]
+        MAEDEC["MAE Decoder<br/>4 layers"]
+        RECON["Reconstructed pixels"]
+        MASKBLK --> RND
+        MASKBLK --> ATTNAVG
+        MASKBLK --> ATTNSEL
+        RND --> MAEDEC
+        ATTNAVG --> MAEDEC
+        ATTNSEL --> MAEDEC
+        MAEDEC --> RECON
+    end
+
+    %% ===== action head =====
+    subgraph ACT["4. Action Prediction"]
+        direction TB
+        POOL2["Mean-pool image tokens"]
+        AHEAD["ActionHead MLP<br/>2304 → 512 → 7"]
+        POOL2 --> AHEAD
+    end
+
+    %% ===== losses =====
+    subgraph LOSSES["5. Joint Loss"]
+        direction TB
+        LRECON["L_recon = MSE<br/>on masked patches only"]
+        LACT["L_action = MSE<br/>on 7-DoF continuous action"]
+        LTOT["L_total = L_action<br/>+ λ · L_recon (λ=0.5)"]
+        LRECON --> LTOT
+        LACT --> LTOT
+    end
+
+    %% ===== optimisation =====
+    subgraph OPT["6. Optimisation"]
+        direction TB
+        AW["AdamW<br/>lr = 1e-4, wd = 0.01"]
+        AMP["Mixed precision<br/>bfloat16"]
+        CLIP["Grad-clip max-norm 1.0"]
+        EMABL["EMA update (C5)<br/>β = 0.999"]
+        AW --> AMP --> CLIP --> EMABL
+    end
+
+    %% ===== logging =====
+    subgraph LOG["7. Logging & Evaluation"]
+        direction TB
+        WB["Weights &amp; Biases<br/>train/recon/total loss"]
+        VAL["Validation<br/>per-DoF MAE (50 batches/epoch)"]
+        CKPT["Checkpoint<br/>(best train_loss)"]
+        WB --> VAL --> CKPT
+    end
+
+    %% ===== flow =====
+    DATA --> FWD
+    FWD --> MASKDEC
+    FWD --> ACT
+    MASKDEC --> LOSSES
+    ACT --> LOSSES
+    LOSSES --> OPT
+    OPT --> LOG
+    LOG -.->|"epoch end<br/>(parameters update)"| FWD
+
+    %% ===== styling =====
+    classDef stage fill:#cdeaff,stroke:#1e6db8,color:#000
+    classDef loss fill:#ffe7c4,stroke:#b5751a,color:#000
+    classDef opt fill:#d4f4d4,stroke:#2d8b2d,color:#000
+    class DATA,FWD,MASKDEC,ACT,LOG stage
+    class LOSSES loss
+    class OPT opt

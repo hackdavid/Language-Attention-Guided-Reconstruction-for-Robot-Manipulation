@@ -1,0 +1,85 @@
+%% LA-ReconVLA system architecture (Figure 1)
+%% Render: mmdc -i architecture.mmd -o architecture.png -w 1600 -H 900 -b white
+flowchart TB
+    %% ===== inputs =====
+    subgraph IN["Inputs"]
+        IMG["Image<br/>224 x 224 x 3"]
+        TXT["Language Instruction<br/>e.g. &quot;put the bowl in the drawer&quot;"]
+    end
+
+    %% ===== backbone =====
+    subgraph BB["PaliGemma2-3B Backbone (mostly frozen)"]
+        direction TB
+        VT["SigLIP Vision Tower<br/>27 encoder layers<br/>last 2 + post-LN trainable"]
+        MMP["Multi-Modal Projector<br/>2304-d linear"]
+        LM["Gemma-2 2B LM<br/>26 decoder layers (frozen)"]
+        VT --> MMP --> LM
+    end
+
+    IMG --> VT
+    TXT --> LM
+
+    %% ===== outputs from backbone =====
+    LM --> ITOK["image_hidden_states<br/>[B, 256, 2304]"]
+    LM --> ATTN["LM cross-attention<br/>26 layers x H heads"]
+
+    %% ===== AttentionGuidedMasker =====
+    subgraph MASK["AttentionGuidedMasker"]
+        direction TB
+        AGG["Aggregate text-to-image attention<br/>last 3 LM layers, selected heads"]
+        TOPK["Top-k saliency<br/>k = 64 (25% of 256)"]
+        BIN["Binary mask M ∈ {0,1}^256"]
+        AGG --> TOPK --> BIN
+    end
+    ATTN --> MASK
+
+    %% ===== EMA teacher (C5 only) =====
+    subgraph EMA["EMA Teacher (C5 only)"]
+        TVT["EMA Vision Tower<br/>β = 0.999, no grad"]
+    end
+    IMG -.->|C5 only| TVT
+    TVT -.->|teacher attention| AGG
+
+    %% ===== MAE decoder =====
+    subgraph DEC["MAE Decoder (4 layers, dim = 256, 8 heads)"]
+        direction TB
+        IPROJ["Input projection<br/>2304 → 256"]
+        MTOK["Replace masked → learnable [M] token"]
+        TFM["4-layer Transformer Decoder"]
+        PHEAD["Pixel head 256 → 588<br/>(14×14×3 patch)"]
+        IPROJ --> MTOK --> TFM --> PHEAD
+    end
+    ITOK --> IPROJ
+    BIN --> MTOK
+
+    %% ===== action head =====
+    subgraph AH["Action Head (2-layer MLP)"]
+        direction TB
+        POOL["Mean pool over 256 image tokens"]
+        FC1["Linear 2304 → 512 + GELU"]
+        FC2["Linear 512 → 7"]
+        POOL --> FC1 --> FC2
+    end
+    ITOK --> POOL
+
+    %% ===== losses =====
+    subgraph LOSS["Joint Training Loss"]
+        direction TB
+        LR["L_recon = MSE on masked patches"]
+        LA["L_action = MSE on 7-DoF Δ-action"]
+        LT["L_total = L_action + λ · L_recon"]
+        LR --> LT
+        LA --> LT
+    end
+    PHEAD --> LR
+    FC2 --> LA
+
+    %% ===== styling =====
+    classDef frozen fill:#e0e0e0,stroke:#555,color:#000
+    classDef trainable fill:#cdeaff,stroke:#1e6db8,color:#000
+    classDef loss fill:#ffe7c4,stroke:#b5751a,color:#000
+    classDef ema fill:#f3e6ff,stroke:#6b3fa0,color:#000,stroke-dasharray:4 3
+    class VT,MMP,LM frozen
+    class MASK,DEC,AH trainable
+    class LOSS loss
+    class EMA ema

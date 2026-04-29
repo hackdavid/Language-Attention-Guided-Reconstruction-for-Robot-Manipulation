@@ -21,7 +21,6 @@ Vision–Language–Action (VLA) models couple a visual backbone with a language
 3. **Single-pass MAE beats iterative diffusion by 58–1225×.** The decoder forward pass completes in 51.9 ± 6.7 ms on CPU. The same module iterated `T ∈ {50, 250, 1000}` times (lower-bounding the depth-matched diffusion head) takes 3.0 s, 15.2 s, and 63.6 s respectively. Hypothesis H2 from Part 1 is empirically supported by a wide margin.
 4. **The fix is in the repo.** `configs/C3_lora.yaml` and `configs/C5_lora.yaml` inject LoRA (rank 16, α 32) into the SigLIP self-attention, multi-modal projector, and Gemma-2 layers, raising effective trainable capacity to ≈40 M. These runs are queued for the next compute window.
 
-See the full report in [`evidence/report2.md`](evidence/report2.md).
 
 ---
 
@@ -141,11 +140,7 @@ la-reconvla/
 │   ├── 04_evaluation_benchmarking.md
 │   ├── exp_C1_baseline.md … exp_C5_ema_teacher.md  exp_ablations.md
 │   └── PIPELINE.md  README.md
-├── evidence/                   # Part 2 report + reproducible evidence
-│   ├── report2.md              # 3,300-word Part 2 report (23 IEEE refs, all cited)
-│   ├── report2_appendix.md     # hyperparameters, per-epoch tables, repro commands
-│   ├── report1.md              # Part 1 critical appraisal and proposal
-│   ├── report1_feedback.md     # examiner feedback on Part 1 (addressed in §3.3, §4.3, §5 of report2)
+├── evidence/                   #  reproducible 
 │   ├── dataset.md              # LIBERO data schema and preprocessing
 │   ├── metrics.md              # final-step W&B scalars for C1–C5 (per-condition)
 │   ├── writing_guidence.md     # assessment brief and rubric
